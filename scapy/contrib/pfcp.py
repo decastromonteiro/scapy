@@ -12,10 +12,12 @@
 from __future__ import absolute_import
 import struct
 from scapy.fields import BitEnumField, BitField, ByteEnumField, ByteField, \
-    ConditionalField, IntField, IPField, ShortField, StrLenField, ShortEnumField
+    ConditionalField, IntField, IPField, ShortField, StrLenField, ShortEnumField, \
+    LongField, SecondsIntField, UTCTimeField, FieldLenField, XBitField, PacketListField
 
+from scapy.layers.inet import UDP
 from scapy.layers.inet6 import IP6Field
-from scapy.packet import Packet, plain_str, bytes_hex
+from scapy.packet import Packet, plain_str, bytes_hex, bind_layers, Raw
 from scapy.volatile import RandIP, RandIP6
 
 
@@ -277,7 +279,7 @@ class IE_Base(Packet):
                 153: "Framed-Route",
                 154: "Framed-Routing",
                 155: "Framed-IPv6-Route"}
-    fields_desc = [ShortEnumField("type", 0, ie_types),
+    fields_desc = [ShortEnumField("ietype", 0, ie_types),
                    ShortField("length", None)]
 
     def post_build(self, pkt, pay):
@@ -310,6 +312,70 @@ class IE_Base(Packet):
         return "", pkt
 
 
+class IE_NotImplemented(IE_Base):
+    """
+    Copied from scapy.contrib.gtp
+    """
+    name = "IE Not Implemented"
+    fields_desc = [ShortEnumField("ietype", 0, IE_Base.ie_types),
+                   ShortField("length", None),
+                   ConditionalField(ShortField('enterprise_id', 2202),
+                                    lambda pkt: pkt.ietype >= 32768),
+                   StrLenField("data", "", length_from=lambda x: x.length)]
+
+    def extract_padding(self, pkt):
+        return "", pkt
+
+
+def IE_Dispatcher(pkt):
+    """
+    Inspired by scapy.contrib.gtp
+    Function to be passed to PacketListField parameter cls.
+    This function works as a dispatch_hook classmethod.
+    This function will try to identify the correct Information Elements that are in the PacketListField.
+    """
+    # Define a dictionary of Information Elements Classes identified by ietype.
+    ietype_cls = {19: IE_Cause,
+                  20: IE_SourceInterface,
+                  21: IE_FTEID,
+                  22: IE_NetworkInstance,
+                  23: IE_SDFFilter,
+                  24: IE_ApplicationID,
+                  25: IE_GateStatus,
+                  28: IE_QERCorrelationID,
+                  29: IE_Precedence,
+                  31: IE_VolumeThreshold,
+                  32: IE_TimeThreshold,
+                  33: IE_MonitoringTime,
+                  34: IE_SubsequentVolumeThreshold,
+                  35: IE_SubsequentTimeThreshold,
+                  36: IE_InactivityDetectionTime,
+                  37: IE_ReportingTriggers,
+                  38: IE_RedirectInformation,
+                  39: IE_ReportType,
+                  40: IE_OffendingIE,
+                  42: IE_DestinationInterface,
+                  43: IE_UPFunctionFeatures,
+                  44: IE_ApplyAction,
+                  58: IE_ApplicationIDsPFDs,
+                  59: IE_PFD,
+                  61: IE_PFDContents,
+                  96: IE_RecoveryTimeStamp,
+                  }
+
+    if len(pkt) < 1:
+        return Raw(pkt)
+
+    # Try to use struct.unpack to solve the ietype field and convert it to decimal.
+    try:
+        ietype = struct.unpack("!H", pkt[:2])[0]
+        cls = ietype_cls.get(ietype, IE_NotImplemented)
+        return cls(pkt)
+    # If there is a struct.error exception, return the Raw packet string.
+    except struct.error:
+        return Raw(pkt)
+
+
 class IE_Cause(IE_Base):
     """
     The Cause value shall be included in a response message.
@@ -336,7 +402,7 @@ class IE_Cause(IE_Base):
                     75: "No resources available",
                     76: "Service not supported",
                     77: "System failure"}
-    fields_desc = [ShortEnumField("type", 19, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 19, IE_Base.ie_types),
                    ShortField("length", None),
                    ByteEnumField("cause_value", 1, cause_values)]
 
@@ -363,7 +429,7 @@ class IE_SourceInterface(IE_Base):
                         13: "Spare",
                         14: "Spare",
                         15: "Spare"}
-    fields_desc = [ShortEnumField("type", 20, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 20, IE_Base.ie_types),
                    ShortField("length", None),
                    BitField("spare", 0, 4),
                    BitEnumField("interface_value", 1, 4, interface_values)]
@@ -375,7 +441,7 @@ class IE_FTEID(IE_Base):
 
     """
     name = "F-TEID"
-    fields_desc = [ShortEnumField("type", 21, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 21, IE_Base.ie_types),
                    ShortField("length", None),
                    BitField("spare", 0, 4),
                    BitField("chid", 0, 1),
@@ -416,7 +482,7 @@ class IE_NetworkInstance(IE_Base):
 
     """
     name = "Network Instance"
-    fields_desc = [ShortEnumField("type", 22, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 22, IE_Base.ie_types),
                    ShortField("length", None),
                    OctetString("network_instance", "internet", length_from=lambda pkt: len(pkt.network_instance))]
 
@@ -424,7 +490,7 @@ class IE_NetworkInstance(IE_Base):
 class IE_SDFFilter(IE_Base):
     # todo: create a Field Class to support an octetstring with user defined size ex:tos_traffic_class, security, etc..
     name = "SDF Filter"
-    fields_desc = [ShortEnumField("type", 23, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 23, IE_Base.ie_types),
                    ShortField("length", None),
                    BitField("spare", 0, 3),
                    BitField("bid", 0, 1),
@@ -445,7 +511,7 @@ class IE_ApplicationID(IE_Base):
     (e.g. its value may represent an application such as a list of URLs).
     """
     name = "Application ID"
-    fields_desc = [ShortEnumField("type", 24, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 24, IE_Base.ie_types),
                    ShortField("length", None),
                    OctetString("application_identifier", "www.google.com",
                                length_from=lambda pkt: len(pkt.application_identifier))]
@@ -461,15 +527,427 @@ class IE_GateStatus(IE_Base):
                    2: 'For Future Use (CLOSED)',
                    3: 'For Future Use (CLOSED)'}
     name = "Gate Status"
-    fields_desc = [ShortEnumField("type", 25, IE_Base.ie_types),
+    fields_desc = [ShortEnumField("ietype", 25, IE_Base.ie_types),
                    ShortField("length", None),
                    BitField("spare", 0, 4),
                    BitEnumField("ul_gate", 0, 2, gate_values),
                    BitEnumField("dl_gate", 0, 2, gate_values)]
 
 
-class PFCPHeader(Packet):
-    PFCPmessageType = {
+class IE_QERCorrelationID(IE_Base):
+    """
+    It contains a QoS Enforcement Rule Correlation ID to correlate QERs from different PFCP sessions.
+    The QER Correlation ID shall be dynamically assigned by the CP function and provisioned by the CP function in
+    different PFCP sessions to correlate QERs used in these PFCP sessions.
+    """
+    name = "QER Correlation ID"
+    fields_desc = [ShortEnumField("ietype", 28, IE_Base.ie_types),
+                   ShortField("length", None),
+                   IntField("qer_id", 0)]
+
+
+class IE_Precedence(IE_Base):
+    """
+    It defines the relative precedence of a PDR among all the PDRs provisioned within an PFCP session,
+    when looking for a PDR matching an incoming packet.
+    """
+    name = "Precedence"
+    fields_desc = [ShortEnumField("ietype", 29, IE_Base.ie_types),
+                   ShortField("length", None),
+                   IntField("precedence", 0)]
+
+
+class IE_VolumeThreshold(IE_Base):
+    """
+    The Volume Threshold IE contains the traffic volume thresholds to be monitored by the UP function.
+    """
+    name = "Volume Threshold"
+    fields_desc = [ShortEnumField("ietype", 31, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 5),
+                   BitField("dlvol", 0, 1),
+                   BitField("ulvol", 0, 1),
+                   BitField("tovol", 1, 1),
+                   ConditionalField(LongField("total_volume", 10000),
+                                    lambda pkt: pkt.tovol == 1),
+                   ConditionalField(LongField("uplink_volume", 0),
+                                    lambda pkt: pkt.ulvol == 1),
+                   ConditionalField(LongField("downlink_volume", 0),
+                                    lambda pkt: pkt.dlvol == 1)]
+
+
+class IE_TimeThreshold(IE_Base):
+    """
+    The Time Threshold IE contains the traffic duration threshold in seconds to be monitored by the UP function.
+    """
+    name = "Time Threshold"
+    fields_desc = [ShortEnumField("ietype", 32, IE_Base.ie_types),
+                   ShortField("length", None),
+                   SecondsIntField("time_threshold", 0)]
+
+
+class IE_MonitoringTime(IE_Base):
+    # Todo: Analyze RFC 5905 and make sure UTCTimeField is correct to use here.
+    """
+    The Monitoring Time IE indicates the time at which the UP function is expected to reapply the thresholds.
+    The Monitoring Time field shall indicate the monitoring time in UTC time.
+    It shall be encoded in the same format as the first four octets of the 64-bit timestamp format as defined
+    in section 6 of IETF RFC 5905
+    """
+    name = "Monitoring Time"
+    fields_desc = [ShortEnumField("ietype", 33, IE_Base.ie_types),
+                   ShortField("length", None),
+                   UTCTimeField("monitoring_time", 0)]
+
+
+class IE_SubsequentVolumeThreshold(IE_Base):
+    """
+    The Subsequent Volume Threshold IE contains the subsequent traffic volume thresholds to be monitored
+    by the UP function after the Monitoring Time.
+    """
+    name = "Subsequent Volume Threshold"
+    fields_desc = [ShortEnumField("ietype", 34, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 5),
+                   BitField("dlvol", 0, 1),
+                   BitField("ulvol", 0, 1),
+                   BitField("tovol", 1, 1),
+                   ConditionalField(LongField("total_volume", 10000),
+                                    lambda pkt: pkt.tovol == 1),
+                   ConditionalField(LongField("uplink_volume", 0),
+                                    lambda pkt: pkt.ulvol == 1),
+                   ConditionalField(LongField("downlink_volume", 0),
+                                    lambda pkt: pkt.dlvol == 1)]
+
+
+class IE_SubsequentTimeThreshold(IE_Base):
+    """
+    The Subsequent Time Threshold IE contains the subsequent traffic duration threshold in second
+    to be monitored by the UP function after the Monitoring Time.
+    """
+    name = "Subsequent Time Threshold"
+    fields_desc = [ShortEnumField("ietype", 35, IE_Base.ie_types),
+                   ShortField("length", None),
+                   SecondsIntField("time_threshold", 0)]
+
+
+class IE_InactivityDetectionTime(IE_Base):
+    """
+    The Inactivity Detection Time IE contains the inactivity time period, in seconds,
+    to be monitored by the UP function.
+    """
+    name = "Inactivity Detection Time"
+    fields_desc = [ShortEnumField("ietype", 36, IE_Base.ie_types),
+                   ShortField("length", None),
+                   SecondsIntField("detection_time", 0)]
+
+
+class IE_ReportingTriggers(IE_Base):
+    """
+    It indicates the reporting trigger(s) for the UP function to send a report to the CP function.
+
+    PERIO (Periodic Reporting): when set to 1, this indicates a request for periodic reporting.
+
+    VOLTH (Volume Threshold): when set to 1, this indicates a request for reporting when
+    the data volume usage reaches a volume threshold.
+
+    TIMTH (Time Threshold): when set to 1, this indicates a request for reporting when
+    the time usage reaches a time threshold.
+
+    QUHTI (Quota Holding Time): when set to 1, this indicates a request for reporting when
+    no packets have been received for a period exceeding the Quota Holding Time.
+
+    START (Start of Traffic): when set to 1, this indicates a request for reporting when
+    detecting the start of an SDF or Application traffic.
+
+    STOPT (Stop of Traffic): when set to 1, this indicates a request for reporting when
+    detecting the stop of an SDF or Application Traffic.
+
+    DROTH (Dropped DL Traffic Threshold): when set to 1, this indicates a request for reporting when
+    the DL traffic being dropped reaches a threshold.
+
+    LIUSA (Linked Usage Reporting): when set to 1, this indicates a request for linked usage reporting,
+    i.e. a request for reporting a usage report for a URR when a usage report is reported for a linked URR
+
+    VOLQU (Volume Quota): when set to 1, this indicates a request for reporting when a Volume Quota is exhausted.
+
+    TIMQU (Time Quota): when set to 1, this indicates a request for reporting when a Time Quota is exhausted.
+
+    ENVCL (Envelope Closure): when set to 1, this indicates a request for reporting when
+    conditions for closure of envelope is met.
+
+    MACAR (MAC Addresses Reporting): when set to 1, this indicates a request for reporting the MAC (Ethernet) addresses
+    used as source address of frames sent UL by the UE.
+
+    EVETH (Event Threshold): when set to 1, this indicates a request for reporting when an event threshold is reached.
+
+    """
+    name = "Reporting Triggers"
+    fields_desc = [ShortEnumField("ietype", 37, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("liusa", 0, 1),
+                   BitField("droth", 0, 1),
+                   BitField("stopt", 0, 1),
+                   BitField("start", 0, 1),
+                   BitField("quhti", 0, 1),
+                   BitField("timth", 0, 1),
+                   BitField("volth", 0, 1),
+                   BitField("perio", 0, 1),
+                   BitField("spare", 0, 3),
+                   BitField("eveth", 0, 1),
+                   BitField("macar", 0, 1),
+                   BitField("envcl", 0, 1),
+                   BitField("timqu", 0, 1),
+                   BitField("volqu", 0, 1)]
+
+
+class StrLenFieldUtf8(StrLenField):
+    def h2i(self, pkt, x):
+        return plain_str(x).encode('utf-8')
+
+    def i2h(self, pkt, x):
+        return x.decode('utf-8')
+
+
+class IE_RedirectInformation(IE_Base):
+    name = "Redirect Information"
+    address_types = {0: "IPv4 Address",
+                     1: "IPv6 Address",
+                     2: "URL",
+                     3: "SIP URL",
+                     4: "Spare, for future use.",
+                     5: "Spare, for future use.",
+                     6: "Spare, for future use.",
+                     7: "Spare, for future use.",
+                     8: "Spare, for future use.",
+                     9: "Spare, for future use.",
+                     10: "Spare, for future use.",
+                     11: "Spare, for future use.",
+                     12: "Spare, for future use.",
+                     13: "Spare, for future use.",
+                     14: "Spare, for future use.",
+                     15: "Spare, for future use."}
+    fields_desc = [ShortEnumField("ietype", 38, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 4),
+                   BitEnumField("redirect_address_type", 2, 4, address_types),
+                   FieldLenField("redirect_address_length", None, length_of="redirect_server_address"),
+                   StrLenFieldUtf8("redirect_server_address", 'www.google.com',
+                                   length_from=lambda pkt: pkt.redirect_address_length)]
+
+
+class IE_ReportType(IE_Base):
+    """
+    It indicates the type of the report the UP function sends to the CP function.
+
+    DLDR (Downlink Data Report): when set to 1, this indicates Downlink Data Report.
+
+    USAR (Usage Report): when set to 1, this indicates a Usage Report.
+
+    ERIR (Error Indication Report): when set to 1, this indicates an Error Indication Report.
+
+    UPIR (User Plane Inactivity Report): when set to 1, this indicates a User Plane Inactivity Report.
+
+    At least one bit shall be set to 1. Several bits may be set to 1.
+    """
+    name = "Report Type"
+    fields_desc = [ShortEnumField("ietype", 39, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 4),
+                   BitField("upir", 0, 1),
+                   BitField("erir", 0, 1),
+                   BitField("usar", 1, 1),
+                   BitField("dldr", 0, 1)]
+
+
+class IE_OffendingIE(IE_Base):
+    """
+    The offending IE shall contain a mandatory IE type, if the rejection is due to a conditional
+    or mandatory IE is faulty or missing.
+    """
+    name = "Offending IE"
+    fields_desc = [ShortEnumField("ietype", 40, IE_Base.ie_types),
+                   ShortField("length", None),
+                   ShortEnumField("offending_ie_type", 1, IE_Base.ie_types)]
+
+
+class IE_DestinationInterface(IE_Base):
+    """
+    It indicates the type of the interface towards which an outgoing packet is sent.
+    """
+    name = "Destination Interface"
+    interface_values = {0: "Access",
+                        1: "Core",
+                        2: "SGi-LAN/N6-LAN",
+                        3: "CP-function",
+                        4: "LI Function",
+                        5: "Spare",
+                        6: "Spare",
+                        7: "Spare",
+                        8: "Spare",
+                        9: "Spare",
+                        10: "Spare",
+                        11: "Spare",
+                        12: "Spare",
+                        13: "Spare",
+                        14: "Spare",
+                        15: "Spare"}
+    fields_desc = [ShortEnumField("ietype", 42, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 4),
+                   BitEnumField("interface_value", 0, 4, interface_values)]
+
+
+class IE_UPFunctionFeatures(IE_Base):
+    # todo: Validate what is a bitmask IE and adjust IE accordingly
+    """
+    The UP Function Features IE indicates the features supported by the UP function
+
+    BUCP Downlink Data Buffering in CP function is supported by the UP function.
+    The UP Function Features IE takes the form of a bitmask where each bit set indicates that
+    the corresponding feature is supported. Spare bits shall be ignored by the receiver.
+
+    DDND -> The buffering parameter 'Downlink Data Notification Delay' is supported by the UP function.
+    DLBD -> The buffering parameter 'DL Buffering Duration' is supported by the UP function.
+    TRST -> Traffic Steering is supported by the UP function.
+    FTUP -> F-TEID allocation / release in the UP function is supported by the UP function.
+    PFDM -> The PFD Management procedure is supported by the UP function.
+    HEEU -> Header Enrichment of Uplink traffic is supported by the UP function.
+    TREU -> Traffic Redirection Enforcement in the UP function is supported by the UP function.
+    EMPU -> Sending of End Marker packets supported by the UP function.
+    PDIU -> Support of PDI optimised signalling in UP function (see subclause 5.2.1A.2).
+    UDBC -> Support of UL/DL Buffering Control
+    QUOAC -> The UP function supports being provisioned with the Quota Action to apply when reaching quotas.
+    TRACE -> The UP function supports Trace (see subclause 5.x).
+    FRRT -> UP function supports Framed Routing (see IETF RFC 2865 [37] and IETF RFC 3162 [38]).
+
+    """
+    name = "UP Function Features"
+    fields_desc = [ShortEnumField("ietype", 43, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("treu", 0, 1),
+                   BitField("heeu", 0, 1),
+                   BitField("pfdm", 0, 1),
+                   BitField("ftup", 0, 1),
+                   BitField("trst", 0, 1),
+                   BitField("dlbd", 0, 1),
+                   BitField("ddnd", 0, 1),
+                   BitField("bucp", 0, 1),
+                   BitField("spare", 0, 2),
+                   BitField("frrt", 0, 1),
+                   BitField("trace", 0, 1),
+                   BitField("quoac", 0, 1),
+                   BitField("udbc", 0, 1),
+                   BitField("pdiu", 0, 1),
+                   BitField("empu", 0, 1)]
+
+
+class IE_ApplyAction(IE_Base):
+    """
+    The Apply Action IE indicates the action(s) the UP function is required to apply to packets.
+
+    DROP (Drop): when set to 1, this indicates a request to drop the packets.
+    FORW (Forward): when set to 1, this indicates a request to forward the packets.
+    BUFF (Buffer): when set to 1, this indicates a request to buffer the packets.
+    NOCP (Notify the CP function): when set to 1, this indicates a request to notify the CP function about
+    the arrival of a first downlink packet being buffered.
+    DUPL (Duplicate): when set to 1, this indicates a request to duplicate the packets.
+
+    One and only one of the DROP, FORW and BUFF flags shall be set to 1.
+    The NOCP flag may only be set if the BUFF flag is set.
+    The DUPL flag may be set with any of the DROP, FORW, BUFF and NOCP flags.
+
+    """
+    name = "Apply Action"
+    fields_desc = [ShortEnumField("ietype", 44, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 3),
+                   BitField("dupl", 0, 1),
+                   BitField("nocp", 0, 1),
+                   BitField("buff", 0, 1),
+                   BitField("forw", 0, 1),
+                   BitField("drop", 0, 1)]
+
+
+class IE_PFDContents(IE_Base):
+    """
+    FD (Flow Description): If this bit is set to "1", then the Length of Flow Description and
+    the Flow Description fields shall be present, otherwise they shall not be present.
+
+    URL (URL): If this bit is set to "1", then the Length of URL and the URL fields shall be present,
+    otherwise they shall not be present.
+
+    DN (Domain Name): If this bit is set to "1", then the Length of Domain Name and the Domain Name fields shall
+    be present, otherwise they shall not be present.
+
+    CP (Custom PFD Content): If this bit is set to "1", then the Length of Custom PFD Content and
+    the Custom PFD Content fields shall be present, otherwise they shall not be present.
+
+    The Flow Description field, when present, shall be encoded as an OctetString.
+    The Domain Name field, when present, shall be encoded as an OctetString.
+    The URL field, when present, shall be encoded as an OctetString.
+
+    """
+    name = "PFD Contents"
+    fields_desc = [ShortEnumField("ietype", 61, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 4),
+                   BitField("cp", 0, 1),
+                   BitField("dn", 1, 1),
+                   BitField("url", 0, 1),
+                   BitField("fd", 0, 1),
+                   ConditionalField(FieldLenField("fd_len", None, length_of="flow_description"),
+                                    lambda pkt: pkt.fd == 1),
+                   ConditionalField(OctetString("flow_description", "from a to b", length_from=lambda pkt: pkt.fd_len),
+                                    lambda pkt: pkt.fd == 1),
+                   ConditionalField(FieldLenField("url_len", None, length_of="url_str"),
+                                    lambda pkt: pkt.url == 1),
+                   ConditionalField(OctetString("url_str", "www.google.com", length_from=lambda pkt: pkt.url_len),
+                                    lambda pkt: pkt.url == 1),
+                   ConditionalField(FieldLenField("dn_len", None, length_of="domain_name"),
+                                    lambda pkt: pkt.dn == 1),
+                   ConditionalField(OctetString("domain_name", "www.google.com", length_from=lambda pkt: pkt.dn_len),
+                                    lambda pkt: pkt.dn == 1),
+                   ConditionalField(FieldLenField("cp_len", None, length_of="custom"),
+                                    lambda pkt: pkt.cp == 1),
+                   ConditionalField(OctetString("custom", "ipv4 to ipv6", length_from=lambda pkt: pkt.cp_len),
+                                    lambda pkt: pkt.cp == 1)
+                   ]
+
+
+class IE_PFD(IE_Base):
+    name = "PFD"
+    fields_desc = [ShortEnumField("ietype", 59, IE_Base.ie_types),
+                   ShortField("length", None),
+                   PacketListField(name='information_elements',
+                                   default=[IE_PFDContents()],
+                                   cls=IE_Dispatcher)
+                   ]
+
+
+class IE_ApplicationIDsPFDs(IE_Base):
+    name = "Application ID's PFDs"
+    fields_desc = [ShortEnumField("ietype", 58, IE_Base.ie_types),
+                   ShortField("length", None),
+                   PacketListField(name="information_elements",
+                                   default=[IE_ApplicationID(),
+                                            IE_PFD()],
+                                   cls=IE_Dispatcher)
+                   ]
+
+
+class IE_RecoveryTimeStamp(IE_Base):
+    """
+    It indicates the UTC time when the node started.
+    """
+    name = "Recovery Time Stamp"
+    fields_desc = [ShortEnumField("ietype", 96, IE_Base.ie_types),
+                   ShortField("length", None),
+                   UTCTimeField("recovery_time", 1543014664)]
+
+
+class NodePFCPHeader(Packet):
+    message_types = {
         0: "Reserved",
         #   PFCP Node related messages
         1: "PFCP Heartbeat Request",
@@ -486,8 +964,48 @@ class PFCPHeader(Packet):
         12: "PFCP Node Report Request",
         13: "PFCP Node Report Response",
         14: "PFCP Session Set Deletion Request",
-        15: "PFCP Session Set Deletion Response",
-        #    PFCP Session related messages
+        15: "PFCP Session Set Deletion Response"}
+
+    name = "PFCP Header"
+    fields_desc = [BitField("version", 1, 3),
+                   BitField("spare", 0, 3),
+                   BitField("mp", 0, 1),
+                   BitField("s", 0, 1),
+                   ByteEnumField("message_type", 0, message_types),
+                   ShortField("length", None),
+                   ConditionalField(LongField("seid", 0),
+                                    lambda pkt: pkt.s == 1),
+                   XBitField("sequence", 0, 24),
+                   ByteField("_spare", 0)]
+
+    def post_build(self, pkt, pay):
+        """
+        This post build is here to calculate the length field in an PFCP Header.
+
+        In order to achieve this:
+         1 - First concatenate packet and payload bytestrings.
+         2 - Calculate the entire length of the packet and exclude 4
+         3 - The final packet must be assembled again concatenating the following fields:
+            a - type field
+            b - calculated length field
+            c - the rest of the packet
+
+        :param pkt: packet in bytestring format
+        :param pay: payload of the packet in bytestring format
+        :return: packet in bytestring format
+        """
+
+        pkt += pay
+        if self.length is None:
+            length = len(pkt) - 4
+            # noinspection PyTypeChecker
+            pkt = pkt[:2] + struct.pack('!H', length) + pkt[4:]
+        return pkt
+
+
+class SessionPFCPHeader(Packet):
+    message_types = {
+        # PFCP Session related messages
         50: "PFCP Session Establishment Request",
         51: "PFCP Session Establishment Response",
         52: "PFCP Session Modification Request",
@@ -498,5 +1016,48 @@ class PFCPHeader(Packet):
         57: "PFCP Session Report Response"
     }
 
-    name = "PFCP Header"
-    fields_desc = []
+
+class PFCPHeartBeatRequest(Packet):
+    name = "PFCP Heartbeat Request"
+    fields_desc = [PacketListField(name="information_elements",
+                                   default=[IE_RecoveryTimeStamp()],
+                                   cls=IE_Dispatcher
+                                   )
+                   ]
+
+
+class PFCPHeartBeatResponse(Packet):
+    name = "PFCP Heartbeat Response"
+    fields_desc = [PacketListField(name="information_elements",
+                                   default=[IE_RecoveryTimeStamp()],
+                                   cls=IE_Dispatcher
+                                   )
+                   ]
+
+
+class PFCPPFDManagementRequest(Packet):
+    name = "PFCP PFD Management Request"
+    fields_desc = [PacketListField(name="information_elements",
+                                   default=[IE_ApplicationIDsPFDs()],
+                                   cls=IE_Dispatcher
+                                   )
+                   ]
+
+
+class PFCPPFDManagementResponse(Packet):
+    name = "PFCP PFD Management Response"
+    fields_desc = [PacketListField(name="information_elements",
+                                   default=[IE_Cause()],
+                                   cls=IE_Dispatcher
+                                   )
+                   ]
+
+
+bind_layers(UDP, NodePFCPHeader, dport=8805)
+bind_layers(UDP, NodePFCPHeader, sport=8805)
+bind_layers(UDP, SessionPFCPHeader, sport=8805)
+bind_layers(UDP, SessionPFCPHeader, dport=8805)
+bind_layers(NodePFCPHeader, PFCPHeartBeatRequest, message_type=1)
+bind_layers(NodePFCPHeader, PFCPHeartBeatResponse, message_type=2)
+bind_layers(NodePFCPHeader, PFCPPFDManagementRequest, message_type=3)
+bind_layers(NodePFCPHeader, PFCPPFDManagementResponse, message_type=4)
