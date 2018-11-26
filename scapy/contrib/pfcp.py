@@ -13,7 +13,8 @@ from __future__ import absolute_import
 import struct
 from scapy.fields import BitEnumField, BitField, ByteEnumField, ByteField, \
     ConditionalField, IntField, IPField, ShortField, StrLenField, ShortEnumField, \
-    LongField, SecondsIntField, UTCTimeField, FieldLenField, XBitField, PacketListField
+    LongField, SecondsIntField, UTCTimeField, FieldLenField, XBitField, PacketListField, \
+    BoundStrLenField, Field
 
 from scapy.layers.inet import UDP
 from scapy.layers.inet6 import IP6Field
@@ -314,7 +315,7 @@ class IE_Base(Packet):
 
 class IE_NotImplemented(IE_Base):
     """
-    Copied from scapy.contrib.gtp
+    Inspired by scapy.contrib.gtp
     """
     name = "IE Not Implemented"
     fields_desc = [ShortEnumField("ietype", 0, IE_Base.ie_types),
@@ -362,10 +363,9 @@ def IE_Dispatcher(pkt):
                   61: IE_PFDContents,
                   96: IE_RecoveryTimeStamp,
                   }
-
-    if len(pkt) < 1:
+    # If packet length is less than 2, we cannot extract the "length" field, so return Raw()
+    if len(pkt) < 2:
         return Raw(pkt)
-
     # Try to use struct.unpack to solve the ietype field and convert it to decimal.
     try:
         ietype = struct.unpack("!H", pkt[:2])[0]
@@ -470,6 +470,14 @@ class OctetString(StrLenField):
             return bytes_hex(x)
 
 
+class BoundOctetStrLenField(BoundStrLenField):
+    def i2repr(self, pkt, x):
+        try:
+            return plain_str(x)
+        except BaseException:
+            return bytes_hex(x)
+
+
 class IE_NetworkInstance(IE_Base):
     """
     The Network instance field shall be encoded as an OctetString and shall contain an identifier which
@@ -488,7 +496,7 @@ class IE_NetworkInstance(IE_Base):
 
 
 class IE_SDFFilter(IE_Base):
-    # todo: create a Field Class to support an octetstring with user defined size ex:tos_traffic_class, security, etc..
+    # todo: revisit this SDFFilter to check how to proceed with maxlen on OctetString
     name = "SDF Filter"
     fields_desc = [ShortEnumField("ietype", 23, IE_Base.ie_types),
                    ShortField("length", None),
@@ -499,9 +507,23 @@ class IE_SDFFilter(IE_Base):
                    BitField("ttc", 0, 1),
                    BitField("fd", 0, 1),
                    ByteField("second_spare", 0),
-                   ShortField("fld_length", None),
-                   OctetString("flow_description", "whatsapp", length_from=lambda pkt: len(pkt.flow_description)),
-                   ShortField("tos_traffic_class", 0),
+                   ConditionalField(FieldLenField("fld_length", None, length_of="flow_description"),
+                                    lambda pkt: pkt.fd == 1),
+                   ConditionalField(OctetString("flow_description", "whatsapp",
+                                                length_from=lambda pkt: pkt.fld_length),
+                                    lambda pkt: pkt.fd == 1),
+                   ConditionalField(BoundOctetStrLenField("tos_traffic_class", "", maxlen=2,
+                                                          length_from=lambda pkt: len(pkt.tos_traffic_class)),
+                                    lambda pkt: pkt.ttc == 1),
+                   ConditionalField(BoundOctetStrLenField("security_param_idx", "", maxlen=4,
+                                                          length_from=lambda pkt: len(pkt.security_param_idx)),
+                                    lambda pkt: pkt.spi == 1),
+                   ConditionalField(BoundOctetStrLenField("flow_label", "google_dns", maxlen=3,
+                                                          length_from=lambda pkt: len(pkt.flow_label)),
+                                    lambda pkt: pkt.fl == 1),
+                   ConditionalField(IntField("sdf_filter_id", 0),
+                                    lambda pkt: pkt.bid == 1)
+
                    ]
 
 
@@ -513,7 +535,7 @@ class IE_ApplicationID(IE_Base):
     name = "Application ID"
     fields_desc = [ShortEnumField("ietype", 24, IE_Base.ie_types),
                    ShortField("length", None),
-                   OctetString("application_identifier", "www.google.com",
+                   OctetString("application_identifier", "Google",
                                length_from=lambda pkt: len(pkt.application_identifier))]
 
 
@@ -587,7 +609,6 @@ class IE_TimeThreshold(IE_Base):
 
 
 class IE_MonitoringTime(IE_Base):
-    # Todo: Analyze RFC 5905 and make sure UTCTimeField is correct to use here.
     """
     The Monitoring Time IE indicates the time at which the UP function is expected to reapply the thresholds.
     The Monitoring Time field shall indicate the monitoring time in UTC time.
@@ -869,6 +890,116 @@ class IE_ApplyAction(IE_Base):
                    BitField("drop", 0, 1)]
 
 
+class IE_DownlinkDataServiceInformation(Packet):
+    """
+    The Downlink Data Service Information IE is used to carry downlink data service information.
+    """
+    name = "Downlink Data Service Information"
+    fields_desc = [ShortEnumField("ietype", 45, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 6),
+                   BitField("qfii", 0, 1),
+                   BitField("ppi", 0, 1),
+                   ConditionalField(XBitField("ppi_value_spare", 0, 2), lambda pkt: pkt.ppi == 1),
+                   ConditionalField(XBitField("ppi_value", 0, 6), lambda pkt: pkt.ppi == 1),
+                   ConditionalField(XBitField("qfi_spare", 0, 2), lambda pkt: pkt.qfii == 1),
+                   ConditionalField(XBitField("qfi", 0, 6), lambda pkt: pkt.qfii == 1)
+                   ]
+
+
+class IE_DownlinkDataNotificationDelay(Packet):
+    """
+    The Downlink Data Notification Delay IE indicates the delay the UP function shall apply between
+    receiving a downlink data packet and notifying the CP function about the arrival of the packet.
+    """
+    name = "Downlink Data Notification Delay"
+    fields_desc = [ShortEnumField("ietype", 46, IE_Base.ie_types),
+                   ShortField("length", None),
+                   ByteField("delay", 0)
+                   ]
+
+
+class IE_DLBufferingDuration(Packet):
+    """
+    The DL Buffering Duration IE indicates the duration during which the UP function
+    is requested to buffer the downlink data packets
+    """
+    timer_unit_increments = {0: "2 seconds",
+                             1: "1 minute",
+                             2: "10 minutes",
+                             3: "1 hour",
+                             4: "10 hours",
+                             5: "1 minute",
+                             6: "1 minute",
+                             7: "Infinite"}
+    name = "DL Buffering Duration"
+    fields_desc = [ShortEnumField("ietype", 47, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitEnumField("timer_unit", 0, 3, timer_unit_increments),
+                   BitField("timer_value", 0, 5)
+                   ]
+
+
+class IntLenField(Field):
+    """
+    IntField with customizable maximum length of octets (bytes).
+    maxlen is specified as numbers of octets (bytes).
+    """
+    __slots__ = ["maxlen", "fmt_dict"]
+
+    def __init__(self, name, default, maxlen=8):
+        self.maxlen = maxlen
+        self.fmt_dict = {0: '!B', 1: '!B', 2: '!H', 3: "!I", 4: "!I", 5: "!Q", 6: "!Q", 7: "!Q", 8: "!Q"}
+        fmt = self.fmt_dict.get(self.maxlen, "!Q")
+        Field.__init__(self, name, default, fmt)
+
+    def i2len(self, pkt, i):
+        i = int(i)
+        bit_length = i.bit_length()
+        int_byte_length = int(bit_length / 8)
+        float_byte_length = bit_length / 8
+        if float_byte_length > int_byte_length:
+            if int_byte_length < self.maxlen:
+                return int_byte_length + 1
+            else:
+                return self.maxlen
+        if int_byte_length < self.maxlen:
+            return int_byte_length
+        return self.maxlen
+
+    def i2m(self, pkt, s):
+        float_byte_length = int(s).bit_length() / 8
+        s = s if float_byte_length <= self.maxlen else (2 ** (self.maxlen * 8) - 1)
+        return s
+
+    def addfield(self, pkt, s, val):
+        """Add an internal value  to a string"""
+        int_byte_length = int(int(val).bit_length() / 8)
+        float_byte_length = float(int(val).bit_length() / 8)
+        if float_byte_length > int_byte_length:
+            if int_byte_length < self.maxlen:
+                self.fmt = self.fmt_dict.get(int_byte_length + 1, "!Q")
+                return s + struct.pack(self.fmt, self.i2m(pkt, val))
+            else:
+                self.fmt = self.fmt_dict.get(self.maxlen, "!Q")
+                return s + struct.pack(self.fmt, self.i2m(pkt, val))
+        self.fmt = self.fmt_dict.get(int_byte_length, "!Q")
+        return s + struct.pack(self.fmt, self.i2m(pkt, val))
+
+    def getfield(self, pkt, s):
+        """Extract an internal value from a string"""
+        self.sz = struct.calcsize(self.fmt)
+        return s[self.sz:], self.m2i(pkt, struct.unpack(self.fmt, s[:self.sz])[0])
+
+
+class IE_DLBufferingSuggestedPacketCount(Packet):
+    name = "DL Buffering Suggested Packet Count"
+    fields_desc = [ShortEnumField("ietype", 48, IE_Base.ie_types),
+                   FieldLenField("length", None, length_of="packet_count"),
+                   IntLenField("packet_count", 65535, maxlen=2)
+                   ]
+
+
 class IE_PFDContents(IE_Base):
     """
     FD (Flow Description): If this bit is set to "1", then the Length of Flow Description and
@@ -916,6 +1047,9 @@ class IE_PFDContents(IE_Base):
 
 
 class IE_PFD(IE_Base):
+    """
+    Type: Grouped IE
+    """
     name = "PFD"
     fields_desc = [ShortEnumField("ietype", 59, IE_Base.ie_types),
                    ShortField("length", None),
@@ -926,6 +1060,9 @@ class IE_PFD(IE_Base):
 
 
 class IE_ApplicationIDsPFDs(IE_Base):
+    """
+    Type: Grouped IE
+    """
     name = "Application ID's PFDs"
     fields_desc = [ShortEnumField("ietype", 58, IE_Base.ie_types),
                    ShortField("length", None),
@@ -938,6 +1075,7 @@ class IE_ApplicationIDsPFDs(IE_Base):
 
 class IE_RecoveryTimeStamp(IE_Base):
     """
+    Type: Extendable IE
     It indicates the UTC time when the node started.
     """
     name = "Recovery Time Stamp"
@@ -946,25 +1084,25 @@ class IE_RecoveryTimeStamp(IE_Base):
                    UTCTimeField("recovery_time", 1543014664)]
 
 
+#   PFCP Node related messages
+
 class NodePFCPHeader(Packet):
-    message_types = {
-        0: "Reserved",
-        #   PFCP Node related messages
-        1: "PFCP Heartbeat Request",
-        2: "PFCP Heartbeat Response",
-        3: "PFCP PFD Management Request",
-        4: "PFCP PFD Management Response",
-        5: "PFCP Association Setup Request",
-        6: "PFCP Association Setup Response",
-        7: "PFCP Association Update Request",
-        8: "PFCP Association Update Response",
-        9: "PFCP Association Release Request",
-        10: "PFCP Association Release Response",
-        11: "PFCP Version Not Supported Response",
-        12: "PFCP Node Report Request",
-        13: "PFCP Node Report Response",
-        14: "PFCP Session Set Deletion Request",
-        15: "PFCP Session Set Deletion Response"}
+    message_types = {0: "Reserved",
+                     1: "PFCP Heartbeat Request",
+                     2: "PFCP Heartbeat Response",
+                     3: "PFCP PFD Management Request",
+                     4: "PFCP PFD Management Response",
+                     5: "PFCP Association Setup Request",
+                     6: "PFCP Association Setup Response",
+                     7: "PFCP Association Update Request",
+                     8: "PFCP Association Update Response",
+                     9: "PFCP Association Release Request",
+                     10: "PFCP Association Release Response",
+                     11: "PFCP Version Not Supported Response",
+                     12: "PFCP Node Report Request",
+                     13: "PFCP Node Report Response",
+                     14: "PFCP Session Set Deletion Request",
+                     15: "PFCP Session Set Deletion Response"}
 
     name = "PFCP Header"
     fields_desc = [BitField("version", 1, 3),
@@ -1001,20 +1139,6 @@ class NodePFCPHeader(Packet):
             # noinspection PyTypeChecker
             pkt = pkt[:2] + struct.pack('!H', length) + pkt[4:]
         return pkt
-
-
-class SessionPFCPHeader(Packet):
-    message_types = {
-        # PFCP Session related messages
-        50: "PFCP Session Establishment Request",
-        51: "PFCP Session Establishment Response",
-        52: "PFCP Session Modification Request",
-        53: "PFCP Session Modification Response",
-        54: "PFCP Session Deletion Request",
-        55: "PFCP Session Deletion Response",
-        56: "PFCP Session Report Request",
-        57: "PFCP Session Report Response"
-    }
 
 
 class PFCPHeartBeatRequest(Packet):
@@ -1055,9 +1179,24 @@ class PFCPPFDManagementResponse(Packet):
 
 bind_layers(UDP, NodePFCPHeader, dport=8805)
 bind_layers(UDP, NodePFCPHeader, sport=8805)
-bind_layers(UDP, SessionPFCPHeader, sport=8805)
-bind_layers(UDP, SessionPFCPHeader, dport=8805)
 bind_layers(NodePFCPHeader, PFCPHeartBeatRequest, message_type=1)
 bind_layers(NodePFCPHeader, PFCPHeartBeatResponse, message_type=2)
 bind_layers(NodePFCPHeader, PFCPPFDManagementRequest, message_type=3)
 bind_layers(NodePFCPHeader, PFCPPFDManagementResponse, message_type=4)
+
+
+#   PFCP Session related messages
+
+class SessionPFCPHeader(Packet):
+    message_types = {50: "PFCP Session Establishment Request",
+                     51: "PFCP Session Establishment Response",
+                     52: "PFCP Session Modification Request",
+                     53: "PFCP Session Modification Response",
+                     54: "PFCP Session Deletion Request",
+                     55: "PFCP Session Deletion Response",
+                     56: "PFCP Session Report Request",
+                     57: "PFCP Session Report Response"}
+
+
+bind_layers(UDP, SessionPFCPHeader, sport=8805)
+bind_layers(UDP, SessionPFCPHeader, dport=8805)
