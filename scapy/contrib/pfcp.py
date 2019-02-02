@@ -305,7 +305,6 @@ class IE_Base(Packet):
         pkt += pay
         if self.length is None:
             length = len(pkt) - 4
-            # noinspection PyTypeChecker
             pkt = pkt[:2] + struct.pack('!H', length) + pkt[4:]
         return pkt
 
@@ -1073,6 +1072,98 @@ class IE_ApplicationIDsPFDs(IE_Base):
                    ]
 
 
+class IE_MeasurementMethod(IE_Base):
+    """
+    Type: Extendable IE
+    DURAT (Duration): when set to 1, this indicates a request for measuring the duration of the traffic.
+    VOLUM (Volume): when set to 1, this indicates a request for measuring the volume of the traffic.
+    EVENT (Event): when set to 1, this indicates a request for measuring the events.
+    """
+    name = "Measurement Method"
+    fields_desc = [ShortEnumField("ietype", 62, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("spare", 0, 5),
+                   BitField("event", 0, 1),
+                   BitField("volum", 1, 1),
+                   BitField("durat", 0, 1)
+
+                   ]
+
+
+class IE_UsageReportTrigger(IE_Base):
+    """
+    Type: Extendable IE
+    PERIO (Periodic Reporting): when set to 1, this indicates a periodic report.
+    VOLTH (Volume Threshold): when set to 1, this indicates that the data volume usage reaches a volume threshold.
+    TIMTH (Time Threshold): when set to 1, this indicates that the time usage reaches a volume threshold.
+    QUHTI (Quota Holding Time): when set to 1, this indicates that no packets have been received for a period
+    exceeding the Quota Holding Time.
+    START (Start of Traffic): when set to 1, this indicates that the start of traffic is detected.
+    STOPT (Stop of Traffic): when set to 1, this indicates that the stop of traffic is detected.
+    DROTH (Dropped DL Traffic Threshold): when set to 1, this indicates that the DL traffic being dropped reaches a threshold.
+    IMMER (Immediate Report): when set to 1, this indicates an immediate report reported on CP function demand,
+    or when the UP function generates an immediate report e.g. due to being instructed to deactivate a
+    network resource measurement via the Inactive Measurement flag of the Measurement Information IE of the URR.
+    VOLQU (Volume Quota): when set to 1, this indicates that the Volume Quota has been exhausted.
+    TIMQU (Time Quota): when set to 1, this indicates that the Time Quota has been exhausted.
+    LIUSA (Linked Usage Reporting): when set to 1, this indicates a linked usage report, i.e. a usage report being
+    reported for a URR due to a usage report being also reported for a linked URR.
+    TERMR (Termination Report): when set to 1, this indicates a usage report being reported
+    (in a PFCP Session Deletion Response) for a URR due to the termination of the PFCP session, or a
+    usage report being reported (in a PFCP Session Modification Response) for a URR due to the removal of the URR.
+    MONIT (Monitoring Time): when set to 1, this indicates a usage report being reported for a URR due to the
+    Monitoring Time being reached.
+    ENVCL (Envelope Closure): when set to 1, this indicates the usage report is generated for closure of an envelope
+    MACAR (MAC Addresses Reporting): when set to 1, this indicates a usage report to report MAC (Ethernet) addresses
+     used as source address of frames sent UL by the UE.
+    EVETH (Event Threshold): when set to 1, this indicates a usage report is generated when an event threshold
+    is reached.
+    """
+    name = "Usage Report Trigger"
+    fields_desc = [ShortEnumField("ietype", 63, IE_Base.ie_types),
+                   ShortField("length", None),
+                   BitField("immer", 0, 1),
+                   BitField("droth", 0, 1),
+                   BitField("stopt", 0, 1),
+                   BitField("start", 0, 1),
+                   BitField("quhti", 0, 1),
+                   BitField("timth", 0, 1),
+                   BitField("volth", 0, 1),
+                   BitField("perio", 0, 1),
+                   BitField("eveth", 0, 1),
+                   BitField("macar", 0, 1),
+                   BitField("envcl", 0, 1),
+                   BitField("monit", 0, 1),
+                   BitField("termr", 0, 1),
+                   BitField("liusa", 0, 1),
+                   BitField("timqu", 0, 1),
+                   BitField("volqu", 0, 1)
+                   ]
+
+
+class IE_MeasurementPeriod(IE_Base):
+    """
+    Type: Extendable IE
+    The Measurement Period IE contains the period, in seconds, for generating periodic usage reports.
+    """
+    name = "Measurement Method"
+    fields_desc = [ShortEnumField("ietype", 64, IE_Base.ie_types),
+                   ShortField("length", None),
+                   IntField("measurement_period", 0)]
+
+
+class IE_FQCSID(IE_Base): #todo
+    """
+    Type: Extendable IE
+    A fully qualified PDN Connection Set Identifier (FQ-CSID) identifies a set of PDN connections belonging to
+    an arbitrary number of UEs on a SGW-C, PGW-C, SGW-U and PGW-U. The FQ-CSID is used on Sxa and Sxb interfaces.
+    """
+    name = "Fully qualified PDN Connection Set Identifier"
+    fields_desc = [ShortEnumField("ietype", 65, IE_Base.ie_types),
+                   ShortField("length", None),
+                   IntField("measurement_period", 0)]
+
+
 class IE_RecoveryTimeStamp(IE_Base):
     """
     Type: Extendable IE
@@ -1136,7 +1227,6 @@ class NodePFCPHeader(Packet):
         pkt += pay
         if self.length is None:
             length = len(pkt) - 4
-            # noinspection PyTypeChecker
             pkt = pkt[:2] + struct.pack('!H', length) + pkt[4:]
         return pkt
 
